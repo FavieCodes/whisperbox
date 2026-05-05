@@ -1,20 +1,8 @@
 {
-  "rewrites": [
+  "routes": [
     {
-      "source": "/auth/:path*",
-      "destination": "https://whisperbox.koyeb.app/auth/:path*"
-    },
-    {
-      "source": "/users/:path*",
-      "destination": "https://whisperbox.koyeb.app/users/:path*"
-    },
-    {
-      "source": "/messages/:path*",
-      "destination": "https://whisperbox.koyeb.app/messages/:path*"
-    },
-    {
-      "source": "/conversations/:path*",
-      "destination": "https://whisperbox.koyeb.app/conversations/:path*"
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }
