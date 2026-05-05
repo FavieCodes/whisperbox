@@ -10,9 +10,6 @@ const api = axios.create({
 })
 
 // ── Token storage ─────────────────────────────────────────────────────────────
-// Tokens are kept in module-level vars (fast) AND sessionStorage (survives
-// StrictMode double-mount / HMR, but NOT a full page refresh by design —
-// restoreSession() re-hydrates from /auth/me + IndexedDB on every cold load).
 let _access  = sessionStorage.getItem('wb_access')  || null
 let _refresh = sessionStorage.getItem('wb_refresh') || null
 
@@ -31,10 +28,15 @@ export const clearTokens     = () => {
 
 // ── WebSocket URL ─────────────────────────────────────────────────────────────
 export function getWsUrl(token) {
-  if (import.meta.env.VITE_API_BASE) {
-    const wsBase = import.meta.env.VITE_API_BASE.replace(/^http/, 'ws')
+  const apiBase = import.meta.env.VITE_API_BASE
+
+  if (apiBase) {
+    // Convert http(s):// → ws(s)://
+    const wsBase = apiBase.replace(/^https/, 'wss').replace(/^http/, 'ws')
     return `${wsBase}/ws?token=${token}`
   }
+
+  // Local dev 
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${window.location.host}/ws?token=${token}`
 }

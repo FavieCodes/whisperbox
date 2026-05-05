@@ -6,7 +6,7 @@ export default defineConfig({
 
   server: {
     proxy: {
-      // REST API — anything that starts with /auth, /users, /messages, /conversations
+      // REST API 
       '/auth':          { target: 'https://whisperbox.koyeb.app', changeOrigin: true, secure: true },
       '/users':         { target: 'https://whisperbox.koyeb.app', changeOrigin: true, secure: true },
       '/messages':      { target: 'https://whisperbox.koyeb.app', changeOrigin: true, secure: true },
