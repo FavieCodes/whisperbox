@@ -111,7 +111,7 @@ export default function ChatPage() {
             })
             n.onclick = () => { window.focus(); n.close() }
           }
-          // Tab title flash
+        
           document.title = `💬 New message — WhisperBox`
           setTimeout(() => { document.title = 'WhisperBox' }, 4000)
         }
@@ -119,7 +119,7 @@ export default function ChatPage() {
     }
     loadInbox()
     return () => disconnectWS()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) 
 
   // ── Reload on focus ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -129,7 +129,7 @@ export default function ChatPage() {
     }
     window.addEventListener('focus', handleFocus)
     return () => window.removeEventListener('focus', handleFocus)
-  }, [activeUserId, privateKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeUserId, privateKey])
 
   // ── Auto-scroll ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -202,8 +202,7 @@ export default function ChatPage() {
   const msgs = activeUserId ? (conversations[activeUserId] ?? []) : []
 
   // ── Build visible conversation list ──────────────────────────────────────
-  // Show all conversations not hidden. If the active contact isn't in the
-  // list yet (e.g. freshly opened via search), inject it so it's visible.
+
   const visibleList = (() => {
     const base = conversationList.filter((c) => !hiddenConvos.has(c.id ?? c.user_id))
     if (!activeContact) return base
