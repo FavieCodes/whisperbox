@@ -79,10 +79,10 @@ export default function ChatPage() {
   const [searchResults, setSearchResults] = useState([])
   const [showInfo,      setShowInfo]      = useState(false)
   const [loggingOut,    setLoggingOut]    = useState(false)
-  const [newMsgToast,   setNewMsgToast]   = useState(null) // { name, text }
+  const [newMsgToast,   setNewMsgToast]   = useState(null)
   const [notifPerm,     setNotifPerm]     = useState(() => typeof Notification !== 'undefined' ? Notification.permission : 'default')
-  const bottomRef = useRef(null)
-  const inputRef  = useRef(null)
+  const bottomRef     = useRef(null)
+  const inputRef      = useRef(null)
   const toastTimerRef = useRef(null)
 
   // ── WebSocket + inbox ────────────────────────────────────────────────────
@@ -91,13 +91,12 @@ export default function ChatPage() {
     if (token && privateKey) {
       connectWS(token, privateKey, (msg) => {
         addIncoming(msg)
-        // Show new message notification
         const senderId = msg.sender_id ?? msg.from_user_id
         const activeId = useMessageStore.getState().activeUserId
         if (senderId !== activeId) {
-          const list = useMessageStore.getState().conversationList
+          const list    = useMessageStore.getState().conversationList
           const contact = list.find((c) => (c.user_id || c.id) === senderId)
-          const name = contact?.display_name || contact?.username || 'Someone'
+          const name    = contact?.display_name || contact?.username || 'Someone'
           const preview = msg.plaintext || '🔒 Encrypted message'
           // In-app toast
           clearTimeout(toastTimerRef.current)
@@ -120,14 +119,13 @@ export default function ChatPage() {
     }
     loadInbox()
     return () => disconnectWS()
-  }, []) 
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Reload on focus ──────────────────────────────────────────────────────
   useEffect(() => {
     const handleFocus = () => {
       loadInbox()
-      if (activeUserId && privateKey) {
-        loadConversation(activeUserId, privateKey)
-      }
+      if (activeUserId && privateKey) loadConversation(activeUserId, privateKey)
     }
     window.addEventListener('focus', handleFocus)
     return () => window.removeEventListener('focus', handleFocus)
@@ -237,7 +235,6 @@ export default function ChatPage() {
           <div className="avatar">{user?.username?.[0]?.toUpperCase()}</div>
           <div className="sidebar-user-info">
             <p className="sidebar-uname">{user?.display_name || user?.username}</p>
-            <span className="lock-badge">🔑 E2EE Active</span>
           </div>
         </div>
 
@@ -269,7 +266,7 @@ export default function ChatPage() {
         <div className="sidebar-list">
           <p className="list-label">Conversations</p>
           {conversationList.filter((c) => !hiddenConvos.has(c.id || c.user_id)).map((c) => {
-            const cid = c.id || c.user_id
+            const cid    = c.id || c.user_id
             const unread = unreadCounts[cid] ?? 0
             return (
               <div key={cid} className={`convo-item-wrap ${activeUserId === cid ? 'convo-item-wrap--on' : ''}`}>
