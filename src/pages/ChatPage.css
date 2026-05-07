@@ -210,6 +210,88 @@
 }
 .toast-close:hover { opacity: 1; }
 
+/* ── CONVERSATION ITEM WITH REMOVE BUTTON ─────────────────────────────── */
+.convo-item-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.convo-item-wrap .convo-item {
+  flex: 1;
+  padding-right: 36px; /* room for remove btn */
+}
+.convo-item-wrap--on .convo-item { border-left: 2px solid var(--accent); }
+.convo-remove-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.convo-item-wrap:hover .convo-remove-btn { opacity: 1; }
+.convo-remove-btn:hover {
+  background: var(--danger, #ef4444);
+  color: #fff;
+  opacity: 1;
+}
+
+/* ── UNREAD BADGE ─────────────────────────────────────────────────────── */
+.avatar-rel { position: relative; }
+.unread-dot {
+  position: absolute;
+  top: -3px; right: -3px;
+  min-width: 17px; height: 17px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 3px;
+  border: 2px solid var(--bg-surface);
+}
+.convo-name--unread { font-weight: 700; }
+.convo-new-badge { color: var(--accent); font-weight: 600; font-size: 11px; }
+
+/* ── NOTIFICATION BUTTON ──────────────────────────────────────────────── */
+.notif-btn { font-size: 14px; }
+.notif-on-badge { font-size: 14px; opacity: 0.5; padding: 4px; }
+
+/* ── NEW MESSAGE TOAST ────────────────────────────────────────────────── */
+.toast-new-msg {
+  position: absolute;
+  top: 14px; right: 14px;
+  z-index: 200;
+  background: var(--bg-raised);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  max-width: 280px;
+  animation: slide-in-right 0.25s ease;
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.toast-new-icon { font-size: 20px; flex-shrink: 0; }
+.toast-new-body { flex: 1; min-width: 0; }
+.toast-new-name { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+.toast-new-preview {
+  font-size: 11px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 /* RESPONSIVE */
 @media (max-width: 640px) {
   .sidebar { width: 64px; }
