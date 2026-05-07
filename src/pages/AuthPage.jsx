@@ -48,7 +48,7 @@ export default function AuthPage({ mode }) {
   const [displayName,  setDisplayName]  = useState('')
   const [password,     setPassword]     = useState('')
   const [confirm,      setConfirm]      = useState('')
-  const [keyStep,      setKeyStep]      = useState(null)   // null | 'generating' | 'done'
+  const [keyStep,      setKeyStep]      = useState(null)   
 
   // Password visibility toggles
   const [showPw,      setShowPw]      = useState(false)
@@ -282,9 +282,6 @@ export default function AuthPage({ mode }) {
           }
         </div>
 
-        <div className="auth-security-note">
-          🔐 RSA-OAEP 4096 · AES-GCM 256 · PBKDF2-SHA256 · Web Crypto API
-        </div>
       </div>
     </div>
   )
