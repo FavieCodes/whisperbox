@@ -67,7 +67,7 @@ export default function ChatPage() {
     loadInbox, loadConversation, sendMessage, setActiveUser,
     connectWS, disconnectWS, addIncoming,
     unreadCounts, hiddenConvos,
-    markRead, hideConversation,
+    markRead, hideConversation, unhideConversation,
     error: storeError, clearError,
   } = useMessageStore()
 
@@ -151,6 +151,10 @@ export default function ChatPage() {
   // ── Open conversation ─────────────────────────────────────────────────────
   const openConvo = async (contact) => {
     const c = { ...contact, id: contact.id || contact.user_id }
+
+    // Un-hide if this conversation was previously removed
+    unhideConversation(c.id)
+
     setActiveContact(c)
     setActiveUser(c.id)
     markRead(c.id)
@@ -196,6 +200,18 @@ export default function ChatPage() {
   }
 
   const msgs = activeUserId ? (conversations[activeUserId] ?? []) : []
+
+  // ── Build visible conversation list ──────────────────────────────────────
+  // Show all conversations not hidden. If the active contact isn't in the
+  // list yet (e.g. freshly opened via search), inject it so it's visible.
+  const visibleList = (() => {
+    const base = conversationList.filter((c) => !hiddenConvos.has(c.id ?? c.user_id))
+    if (!activeContact) return base
+    const alreadyInList = base.some((c) => (c.id ?? c.user_id) === activeContact.id)
+    if (alreadyInList) return base
+    // Inject the active contact at the top so it appears immediately
+    return [{ ...activeContact, user_id: activeContact.id }, ...base]
+  })()
 
   const wsLabel = {
     idle:         '— Idle',
@@ -265,8 +281,8 @@ export default function ChatPage() {
         {/* Conversation list */}
         <div className="sidebar-list">
           <p className="list-label">Conversations</p>
-          {conversationList.filter((c) => !hiddenConvos.has(c.id || c.user_id)).map((c) => {
-            const cid    = c.id || c.user_id
+          {visibleList.map((c) => {
+            const cid    = c.id ?? c.user_id
             const unread = unreadCounts[cid] ?? 0
             return (
               <div key={cid} className={`convo-item-wrap ${activeUserId === cid ? 'convo-item-wrap--on' : ''}`}>
@@ -298,7 +314,7 @@ export default function ChatPage() {
               </div>
             )
           })}
-          {conversationList.filter((c) => !hiddenConvos.has(c.id || c.user_id)).length === 0 && (
+          {visibleList.length === 0 && (
             <p className="list-empty">Search for a user above to start messaging.</p>
           )}
         </div>
