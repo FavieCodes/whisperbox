@@ -66,6 +66,8 @@ export default function ChatPage() {
     isLoading, isSending, wsStatus,
     loadInbox, loadConversation, sendMessage, setActiveUser,
     connectWS, disconnectWS, addIncoming,
+    unreadCounts, hiddenConvos,
+    markRead, hideConversation,
     error: storeError, clearError,
   } = useMessageStore()
 
@@ -77,21 +79,49 @@ export default function ChatPage() {
   const [searchResults, setSearchResults] = useState([])
   const [showInfo,      setShowInfo]      = useState(false)
   const [loggingOut,    setLoggingOut]    = useState(false)
+  const [newMsgToast,   setNewMsgToast]   = useState(null) // { name, text }
+  const [notifPerm,     setNotifPerm]     = useState(() => typeof Notification !== 'undefined' ? Notification.permission : 'default')
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
+  const toastTimerRef = useRef(null)
 
   // ── WebSocket + inbox ────────────────────────────────────────────────────
   useEffect(() => {
     const token = getAccessToken()
     if (token && privateKey) {
-      connectWS(token, privateKey, (msg) => addIncoming(msg))
+      connectWS(token, privateKey, (msg) => {
+        addIncoming(msg)
+        // Show new message notification
+        const senderId = msg.sender_id ?? msg.from_user_id
+        const activeId = useMessageStore.getState().activeUserId
+        if (senderId !== activeId) {
+          const list = useMessageStore.getState().conversationList
+          const contact = list.find((c) => (c.user_id || c.id) === senderId)
+          const name = contact?.display_name || contact?.username || 'Someone'
+          const preview = msg.plaintext || '🔒 Encrypted message'
+          // In-app toast
+          clearTimeout(toastTimerRef.current)
+          setNewMsgToast({ name, preview, senderId, contact })
+          toastTimerRef.current = setTimeout(() => setNewMsgToast(null), 5000)
+          // Browser notification
+          if (Notification.permission === 'granted') {
+            const n = new Notification(`New message from ${name}`, {
+              body: preview,
+              icon: '/favicon.svg',
+              tag: `wb-msg-${senderId}`,
+            })
+            n.onclick = () => { window.focus(); n.close() }
+          }
+          // Tab title flash
+          document.title = `💬 New message — WhisperBox`
+          setTimeout(() => { document.title = 'WhisperBox' }, 4000)
+        }
+      })
     }
     loadInbox()
     return () => disconnectWS()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) 
 
-  // ── FIX: Reload active conversation when the page regains focus ──────────
-  // This ensures that if the user refreshes or switches tabs, messages reload.
   useEffect(() => {
     const handleFocus = () => {
       loadInbox()
@@ -125,11 +155,20 @@ export default function ChatPage() {
     const c = { ...contact, id: contact.id || contact.user_id }
     setActiveContact(c)
     setActiveUser(c.id)
+    markRead(c.id)
     setSearchQuery('')
     setSearchResults([])
     setShowInfo(false)
+    setNewMsgToast(null)
     await loadConversation(c.id, privateKey)
     inputRef.current?.focus()
+  }
+
+  // ── Request notification permission ──────────────────────────────────────
+  const requestNotifPermission = async () => {
+    if (typeof Notification === 'undefined') return
+    const perm = await Notification.requestPermission()
+    setNotifPerm(perm)
   }
 
   const openSearchResult = async (result) => {
@@ -178,6 +217,15 @@ export default function ChatPage() {
             <span className="brand-name">WhisperBox</span>
           </div>
           <div className="sidebar-header-actions">
+            {notifPerm !== 'granted' && notifPerm !== 'denied' && (
+              <button className="btn btn-ghost icon-btn notif-btn" onClick={requestNotifPermission}
+                title="Enable notifications">
+                🔔
+              </button>
+            )}
+            {notifPerm === 'granted' && (
+              <span className="notif-on-badge" title="Notifications enabled">🔔</span>
+            )}
             <button className="btn btn-ghost icon-btn" onClick={toggleTheme}
               title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
               {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
@@ -220,26 +268,40 @@ export default function ChatPage() {
         {/* Conversation list */}
         <div className="sidebar-list">
           <p className="list-label">Conversations</p>
-          {conversationList.map((c) => {
+          {conversationList.filter((c) => !hiddenConvos.has(c.id || c.user_id)).map((c) => {
             const cid = c.id || c.user_id
+            const unread = unreadCounts[cid] ?? 0
             return (
-              <button key={cid}
-                className={`convo-item ${activeUserId === cid ? 'convo-item--on' : ''}`}
-                onClick={() => openConvo(c)}>
-                <div className="avatar">{(c.display_name || c.username || '?')[0].toUpperCase()}</div>
-                <div className="convo-info">
-                  <p className="convo-name">{c.display_name || c.username}</p>
-                  <p className="convo-sub">
-                    {c.last_message_at
-                      ? formatDistanceToNow(new Date(c.last_message_at), { addSuffix: true })
-                      : 'tap to open'}
-                  </p>
-                </div>
-                <span className="convo-lock">🔐</span>
-              </button>
+              <div key={cid} className={`convo-item-wrap ${activeUserId === cid ? 'convo-item-wrap--on' : ''}`}>
+                <button
+                  className={`convo-item ${activeUserId === cid ? 'convo-item--on' : ''}`}
+                  onClick={() => openConvo(c)}>
+                  <div className="avatar avatar-rel">
+                    {(c.display_name || c.username || '?')[0].toUpperCase()}
+                    {unread > 0 && <span className="unread-dot">{unread > 9 ? '9+' : unread}</span>}
+                  </div>
+                  <div className="convo-info">
+                    <p className={`convo-name ${unread > 0 ? 'convo-name--unread' : ''}`}>{c.display_name || c.username}</p>
+                    <p className="convo-sub">
+                      {unread > 0
+                        ? <span className="convo-new-badge">● New message</span>
+                        : c.last_message_at
+                          ? formatDistanceToNow(new Date(c.last_message_at), { addSuffix: true })
+                          : 'tap to open'}
+                    </p>
+                  </div>
+                  <span className="convo-lock">🔐</span>
+                </button>
+                <button
+                  className="convo-remove-btn"
+                  title="Remove from list"
+                  onClick={(e) => { e.stopPropagation(); hideConversation(cid) }}>
+                  ✕
+                </button>
+              </div>
             )
           })}
-          {conversationList.length === 0 && (
+          {conversationList.filter((c) => !hiddenConvos.has(c.id || c.user_id)).length === 0 && (
             <p className="list-empty">Search for a user above to start messaging.</p>
           )}
         </div>
@@ -261,6 +323,19 @@ export default function ChatPage() {
           <div className="toast-error fade-in" role="alert">
             <span>⚠ {storeError}</span>
             <button onClick={clearError} className="toast-close">✕</button>
+          </div>
+        )}
+
+        {/* New message toast */}
+        {newMsgToast && (
+          <div className="toast-new-msg fade-in" role="alert"
+            onClick={() => newMsgToast.contact && openConvo(newMsgToast.contact)}>
+            <span className="toast-new-icon">💬</span>
+            <div className="toast-new-body">
+              <p className="toast-new-name">{newMsgToast.name}</p>
+              <p className="toast-new-preview">{newMsgToast.preview}</p>
+            </div>
+            <button className="toast-close" onClick={(e) => { e.stopPropagation(); setNewMsgToast(null) }}>✕</button>
           </div>
         )}
 
