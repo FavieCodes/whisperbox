@@ -1,6 +1,6 @@
 .chat-root { display: flex; height: 100vh; overflow: hidden; }
 
-/* SIDEBAR */
+/* ── SIDEBAR ──────────────────────────────────────────────────────────────── */
 .sidebar {
   width: 300px; flex-shrink: 0;
   background: var(--bg-surface);
@@ -139,6 +139,21 @@
 
 /* MESSAGES */
 .msgs-area { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 6px; }
+
+/* Load-more trigger at top of message list */
+.load-more-trigger {
+  display: flex; align-items: center; justify-content: center;
+  padding: 6px 0 10px; flex-shrink: 0;
+}
+.load-more-btn {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  color: var(--text-muted); border-radius: var(--radius-md);
+  padding: 6px 16px; font-family: var(--font-mono); font-size: 11px;
+  cursor: pointer; transition: var(--transition); display: flex; align-items: center; gap: 6px;
+}
+.load-more-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.load-more-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .msgs-mid {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   flex: 1; gap: 10px; color: var(--text-muted); font-size: 13px; text-align: center;
@@ -156,7 +171,7 @@
 .msg-bubble--mine {
   background: var(--accent); color: #fff; border-bottom-right-radius: 4px;
 }
-[data-theme="dark"] .msg-bubble--mine { color: #0a0b0e; }
+[data-theme="dark"] .msg-bubble--mine { color: #080c10; }
 .msg-bubble--theirs {
   background: var(--bg-raised); color: var(--text-primary);
   border: 1px solid var(--border); border-bottom-left-radius: 4px;
@@ -197,12 +212,12 @@
 .toast-error {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px;
-  background: #2d1515cc; border: 1px solid #7f3a3a88;
+  background: #2a150899; border: 1px solid #9a4a1c66;
   color: var(--danger); border-radius: var(--radius-md);
   padding: 10px 16px; font-size: 13px; z-index: 100;
   box-shadow: var(--shadow-md); white-space: nowrap;
 }
-[data-theme="light"] .toast-error { background: #fee2e2cc; border-color: #fca5a5; }
+[data-theme="light"] .toast-error { background: #fff3e8cc; border-color: #fdba74; }
 .toast-close {
   background: none; border: none; color: var(--danger);
   cursor: pointer; font-size: 14px; padding: 0 2px;
@@ -218,7 +233,7 @@
 }
 .convo-item-wrap .convo-item {
   flex: 1;
-  padding-right: 36px; /* room for remove btn */
+  padding-right: 36px;
 }
 .convo-item-wrap--on .convo-item { border-left: 2px solid var(--accent); }
 .convo-remove-btn {
@@ -239,7 +254,7 @@
 }
 .convo-item-wrap:hover .convo-remove-btn { opacity: 1; }
 .convo-remove-btn:hover {
-  background: var(--danger, #ef4444);
+  background: var(--danger);
   color: #fff;
   opacity: 1;
 }
@@ -258,6 +273,7 @@
   padding: 0 3px;
   border: 2px solid var(--bg-surface);
 }
+[data-theme="dark"] .unread-dot { color: #080c10; }
 .convo-name--unread { font-weight: 700; }
 .convo-new-badge { color: var(--accent); font-weight: 600; font-size: 11px; }
 
@@ -292,12 +308,134 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* RESPONSIVE */
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE — sidebar becomes a top panel, conversations scroll horizontally
+   ══════════════════════════════════════════════════════════════════════════ */
 @media (max-width: 640px) {
-  .sidebar { width: 64px; }
-  .brand-name, .sidebar-user-info, .convo-info, .convo-lock,
-  .list-label, .sidebar-search, .ws-status-bar { display: none; }
-  .convo-item { justify-content: center; padding: 10px; }
-  .sidebar-user { justify-content: center; padding: 10px; }
-  .btn-logout span { display: none; }
+  /* Root becomes a column: sidebar-top-bar + main */
+  .chat-root {
+    flex-direction: column;
+  }
+
+  /* Sidebar takes full width, height driven by content */
+  .sidebar {
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    overflow: visible;
+  }
+
+  /* Brand + actions row */
+  .sidebar-header { padding: 10px 12px; }
+
+  /* User row — stays visible */
+  .sidebar-user { padding: 8px 12px; }
+  .sidebar-user-info { display: flex; }
+
+  /* WS status — stays visible */
+  .ws-status-bar { display: block; padding: 4px 12px; }
+
+  /* Search — stays visible */
+  .sidebar-search { padding: 8px 12px; }
+  .search-drop {
+    left: 12px; right: 12px; top: calc(100% - 6px);
+    z-index: 100;
+  }
+
+  /* ── Conversations become a horizontal chip strip ─────────────────────── */
+  .sidebar-list {
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 6px 8px;
+    gap: 6px;
+    flex: none;
+    height: auto;
+    scrollbar-width: none;
+  }
+  .sidebar-list::-webkit-scrollbar { display: none; }
+
+  .list-label { display: none; }
+
+  .list-empty {
+    white-space: nowrap;
+    padding: 8px 4px;
+    font-size: 11px;
+  }
+
+  /* Each conversation = compact avatar+name chip */
+  .convo-item-wrap {
+    flex-direction: column;
+    flex-shrink: 0;
+    width: 64px;
+    align-items: center;
+    position: relative;
+  }
+  .convo-item-wrap .convo-item {
+    flex: none;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 4px;
+    gap: 4px;
+    width: 64px;
+    border-radius: var(--radius-md);
+    padding-right: 4px;
+  }
+  .convo-item--on {
+    border-left: none;
+    border-bottom: 2px solid var(--accent);
+    background: var(--bg-active);
+  }
+  .convo-item-wrap--on .convo-item {
+    border-left: none;
+    border-bottom: 2px solid var(--accent);
+  }
+
+  .convo-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 0;
+    width: 100%;
+  }
+  .convo-name {
+    font-size: 10px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    width: 100%;
+  }
+  .convo-sub  { display: none; }
+  .convo-lock { display: none; }
+
+  /* Remove button for chip layout */
+  .convo-remove-btn {
+    top: 2px; right: 2px;
+    opacity: 0;
+    width: 16px; height: 16px;
+    font-size: 9px;
+  }
+  .convo-item-wrap:hover .convo-remove-btn { opacity: 1; }
+
+  /* Logout moves to header — hide the footer */
+  .sidebar-footer { display: none; }
+
+  /* Main fills remaining screen height */
+  .chat-main {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Messages */
+  .msgs-area { padding: 12px; gap: 4px; }
+  .msg-row { max-width: 88%; }
+
+  /* Input bar */
+  .input-bar { padding: 10px; gap: 8px; }
+  .send-btn { width: 38px; height: 38px; font-size: 16px; }
 }

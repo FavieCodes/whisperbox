@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import useAuthStore from '../store/authStore.js'
 import useMessageStore from '../store/messageStore.js'
 import { usersAPI, getAccessToken } from '../api/api.js'
@@ -13,14 +13,23 @@ function useTheme() {
     document.documentElement.setAttribute('data-theme', t)
     return t
   })
-
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('wb_theme', theme)
   }, [theme])
-
   const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
   return { theme, toggle }
+}
+
+// ── Mobile detection hook ──────────────────────────────────────────────────
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 640)
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= 640)
+    window.addEventListener('resize', handler)
+    return () => window.removeEventListener('resize', handler)
+  }, [])
+  return isMobile
 }
 
 // ── SVG Icons ──────────────────────────────────────────────────────────────
@@ -63,15 +72,16 @@ export default function ChatPage() {
   const { user, privateKey, publicKey, logout } = useAuthStore()
   const {
     conversations, conversationList, activeUserId,
-    isLoading, isSending, wsStatus,
-    loadInbox, loadConversation, sendMessage, setActiveUser,
+    isLoading, isSending, isLoadingMore, wsStatus,
+    loadInbox, loadConversation, loadMoreMessages, sendMessage, setActiveUser,
     connectWS, disconnectWS, addIncoming,
-    unreadCounts, hiddenConvos,
+    unreadCounts, hiddenConvos, hasMore,
     markRead, hideConversation, unhideConversation,
     error: storeError, clearError,
   } = useMessageStore()
 
   const { theme, toggle: toggleTheme } = useTheme()
+  const isMobile = useIsMobile()
 
   const [activeContact, setActiveContact] = useState(null)
   const [text,          setText]          = useState('')
@@ -80,10 +90,14 @@ export default function ChatPage() {
   const [showInfo,      setShowInfo]      = useState(false)
   const [loggingOut,    setLoggingOut]    = useState(false)
   const [newMsgToast,   setNewMsgToast]   = useState(null)
-  const [notifPerm,     setNotifPerm]     = useState(() => typeof Notification !== 'undefined' ? Notification.permission : 'default')
-  const bottomRef     = useRef(null)
-  const inputRef      = useRef(null)
-  const toastTimerRef = useRef(null)
+  const [notifPerm,     setNotifPerm]     = useState(
+    () => typeof Notification !== 'undefined' ? Notification.permission : 'default'
+  )
+
+  const bottomRef  = useRef(null)
+  const inputRef   = useRef(null)
+  const msgsRef    = useRef(null)
+  const toastTimer = useRef(null)
 
   // ── WebSocket + inbox ────────────────────────────────────────────────────
   useEffect(() => {
@@ -98,28 +112,23 @@ export default function ChatPage() {
           const contact = list.find((c) => (c.user_id || c.id) === senderId)
           const name    = contact?.display_name || contact?.username || 'Someone'
           const preview = msg.plaintext || '🔒 Encrypted message'
-          // In-app toast
-          clearTimeout(toastTimerRef.current)
+          clearTimeout(toastTimer.current)
           setNewMsgToast({ name, preview, senderId, contact })
-          toastTimerRef.current = setTimeout(() => setNewMsgToast(null), 5000)
-          // Browser notification
+          toastTimer.current = setTimeout(() => setNewMsgToast(null), 5000)
           if (Notification.permission === 'granted') {
             const n = new Notification(`New message from ${name}`, {
-              body: preview,
-              icon: '/favicon.svg',
-              tag: `wb-msg-${senderId}`,
+              body: preview, icon: '/favicon.svg', tag: `wb-msg-${senderId}`,
             })
             n.onclick = () => { window.focus(); n.close() }
           }
-        
-          document.title = `💬 New message — WhisperBox`
+          document.title = '💬 New message — WhisperBox'
           setTimeout(() => { document.title = 'WhisperBox' }, 4000)
         }
       })
     }
     loadInbox()
     return () => disconnectWS()
-  }, []) 
+  }, [])
 
   // ── Reload on focus ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -131,10 +140,37 @@ export default function ChatPage() {
     return () => window.removeEventListener('focus', handleFocus)
   }, [activeUserId, privateKey])
 
-  // ── Auto-scroll ──────────────────────────────────────────────────────────
+  // ── Auto-scroll to bottom on new messages ───────────────────────────────
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [conversations, activeUserId])
+
+  // ── Scroll-to-top pagination ─────────────────────────────────────────────
+  // When the user scrolls to the top of the messages area, load older messages.
+  // We anchor scroll position so the view doesn't jump when old messages prepend.
+  const handleMsgsScroll = useCallback(() => {
+    const el = msgsRef.current
+    if (!el || !activeUserId) return
+    if (el.scrollTop < 80 && hasMore[activeUserId] && !isLoadingMore) {
+      // Capture scroll anchor before loading
+      const prevScrollHeight = el.scrollHeight
+      loadMoreMessages(activeUserId, privateKey).then(() => {
+        // Restore position so content doesn't jump
+        requestAnimationFrame(() => {
+          if (msgsRef.current) {
+            msgsRef.current.scrollTop = msgsRef.current.scrollHeight - prevScrollHeight
+          }
+        })
+      })
+    }
+  }, [activeUserId, hasMore, isLoadingMore, privateKey, loadMoreMessages])
+
+  useEffect(() => {
+    const el = msgsRef.current
+    if (!el) return
+    el.addEventListener('scroll', handleMsgsScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleMsgsScroll)
+  }, [handleMsgsScroll])
 
   // ── User search ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -151,10 +187,7 @@ export default function ChatPage() {
   // ── Open conversation ─────────────────────────────────────────────────────
   const openConvo = async (contact) => {
     const c = { ...contact, id: contact.id || contact.user_id }
-
-    // Un-hide if this conversation was previously removed
     unhideConversation(c.id)
-
     setActiveContact(c)
     setActiveUser(c.id)
     markRead(c.id)
@@ -166,7 +199,7 @@ export default function ChatPage() {
     inputRef.current?.focus()
   }
 
-  // ── Request notification permission ──────────────────────────────────────
+  // ── Notification permission ───────────────────────────────────────────────
   const requestNotifPermission = async () => {
     if (typeof Notification === 'undefined') return
     const perm = await Notification.requestPermission()
@@ -201,14 +234,12 @@ export default function ChatPage() {
 
   const msgs = activeUserId ? (conversations[activeUserId] ?? []) : []
 
-  // ── Build visible conversation list ──────────────────────────────────────
-
+  // ── Visible conversation list ─────────────────────────────────────────────
   const visibleList = (() => {
     const base = conversationList.filter((c) => !hiddenConvos.has(c.id ?? c.user_id))
     if (!activeContact) return base
     const alreadyInList = base.some((c) => (c.id ?? c.user_id) === activeContact.id)
     if (alreadyInList) return base
-    // Inject the active contact at the top so it appears immediately
     return [{ ...activeContact, user_id: activeContact.id }, ...base]
   })()
 
@@ -231,10 +262,8 @@ export default function ChatPage() {
           </div>
           <div className="sidebar-header-actions">
             {notifPerm !== 'granted' && notifPerm !== 'denied' && (
-              <button className="btn btn-ghost icon-btn notif-btn" onClick={requestNotifPermission}
-                title="Enable notifications">
-                🔔
-              </button>
+              <button className="btn btn-ghost icon-btn notif-btn"
+                onClick={requestNotifPermission} title="Enable notifications">🔔</button>
             )}
             {notifPerm === 'granted' && (
               <span className="notif-on-badge" title="Notifications enabled">🔔</span>
@@ -243,6 +272,13 @@ export default function ChatPage() {
               title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
               {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
             </button>
+            {/* Logout visible in header on mobile (footer is hidden) */}
+            {isMobile && (
+              <button className="btn btn-ghost icon-btn" onClick={handleLogout}
+                disabled={loggingOut} title="Log out">
+                <LogoutIcon />
+              </button>
+            )}
           </div>
         </div>
 
@@ -253,12 +289,10 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* WS status */}
         <div className="ws-status-bar">
           <span className="ws-status-label">{wsLabel[wsStatus] ?? wsLabel.idle}</span>
         </div>
 
-        {/* Search */}
         <div className="sidebar-search">
           <input className="input search-input" placeholder="Find users…"
             value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
@@ -277,23 +311,27 @@ export default function ChatPage() {
           )}
         </div>
 
-        {/* Conversation list */}
         <div className="sidebar-list">
           <p className="list-label">Conversations</p>
           {visibleList.map((c) => {
             const cid    = c.id ?? c.user_id
             const unread = unreadCounts[cid] ?? 0
             return (
-              <div key={cid} className={`convo-item-wrap ${activeUserId === cid ? 'convo-item-wrap--on' : ''}`}>
+              <div key={cid}
+                className={`convo-item-wrap ${activeUserId === cid ? 'convo-item-wrap--on' : ''}`}>
                 <button
                   className={`convo-item ${activeUserId === cid ? 'convo-item--on' : ''}`}
                   onClick={() => openConvo(c)}>
                   <div className="avatar avatar-rel">
                     {(c.display_name || c.username || '?')[0].toUpperCase()}
-                    {unread > 0 && <span className="unread-dot">{unread > 9 ? '9+' : unread}</span>}
+                    {unread > 0 && (
+                      <span className="unread-dot">{unread > 9 ? '9+' : unread}</span>
+                    )}
                   </div>
                   <div className="convo-info">
-                    <p className={`convo-name ${unread > 0 ? 'convo-name--unread' : ''}`}>{c.display_name || c.username}</p>
+                    <p className={`convo-name ${unread > 0 ? 'convo-name--unread' : ''}`}>
+                      {c.display_name || c.username}
+                    </p>
                     <p className="convo-sub">
                       {unread > 0
                         ? <span className="convo-new-badge">● New message</span>
@@ -304,12 +342,8 @@ export default function ChatPage() {
                   </div>
                   <span className="convo-lock">🔐</span>
                 </button>
-                <button
-                  className="convo-remove-btn"
-                  title="Remove from list"
-                  onClick={(e) => { e.stopPropagation(); hideConversation(cid) }}>
-                  ✕
-                </button>
+                <button className="convo-remove-btn" title="Remove from list"
+                  onClick={(e) => { e.stopPropagation(); hideConversation(cid) }}>✕</button>
               </div>
             )
           })}
@@ -318,7 +352,7 @@ export default function ChatPage() {
           )}
         </div>
 
-        {/* Logout — pinned to bottom */}
+        {/* Desktop logout footer */}
         <div className="sidebar-footer">
           <button className="btn-logout" onClick={handleLogout} disabled={loggingOut}>
             <LogoutIcon />
@@ -330,7 +364,6 @@ export default function ChatPage() {
       {/* ── MAIN ─────────────────────────────────────────────── */}
       <main className="chat-main">
 
-        {/* Send-error toast */}
         {storeError && (
           <div className="toast-error fade-in" role="alert">
             <span>⚠ {storeError}</span>
@@ -338,7 +371,6 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* New message toast */}
         {newMsgToast && (
           <div className="toast-new-msg fade-in" role="alert"
             onClick={() => newMsgToast.contact && openConvo(newMsgToast.contact)}>
@@ -347,7 +379,8 @@ export default function ChatPage() {
               <p className="toast-new-name">{newMsgToast.name}</p>
               <p className="toast-new-preview">{newMsgToast.preview}</p>
             </div>
-            <button className="toast-close" onClick={(e) => { e.stopPropagation(); setNewMsgToast(null) }}>✕</button>
+            <button className="toast-close"
+              onClick={(e) => { e.stopPropagation(); setNewMsgToast(null) }}>✕</button>
           </div>
         )}
 
@@ -379,14 +412,39 @@ export default function ChatPage() {
               </div>
             )}
 
-            <div className="msgs-area">
+            <div className="msgs-area" ref={msgsRef}>
+              {/* ── Load-more indicator at top ── */}
+              {hasMore[activeUserId] && (
+                <div className="load-more-trigger">
+                  <button className="load-more-btn" disabled={isLoadingMore}
+                    onClick={() => {
+                      const el = msgsRef.current
+                      const prevH = el?.scrollHeight ?? 0
+                      loadMoreMessages(activeUserId, privateKey).then(() => {
+                        requestAnimationFrame(() => {
+                          if (msgsRef.current)
+                            msgsRef.current.scrollTop = msgsRef.current.scrollHeight - prevH
+                        })
+                      })
+                    }}>
+                    {isLoadingMore
+                      ? <><div className="spinner" /> Loading…</>
+                      : '↑ Load older messages'}
+                  </button>
+                </div>
+              )}
+
               {isLoading ? (
-                <div className="msgs-mid"><div className="spinner" /><span>Decrypting messages…</span></div>
+                <div className="msgs-mid">
+                  <div className="spinner" /><span>Decrypting messages…</span>
+                </div>
               ) : msgs.length === 0 ? (
                 <div className="msgs-mid fade-in">
                   <span style={{ fontSize: '32px' }}>🔒</span>
                   <p>No messages yet. Say hello!</p>
-                  <p className="c-muted" style={{ fontSize: '12px' }}>Messages are end-to-end encrypted.</p>
+                  <p className="c-muted" style={{ fontSize: '12px' }}>
+                    Messages are end-to-end encrypted.
+                  </p>
                 </div>
               ) : msgs.map((msg, i) => {
                 const senderId = msg.sender_id ?? msg.from_user_id
@@ -401,7 +459,9 @@ export default function ChatPage() {
                     )}
                     <div className={`msg-bubble ${mine ? 'msg-bubble--mine' : 'msg-bubble--theirs'}`}>
                       {msg.decryptError
-                        ? <span className="c-danger" style={{ fontStyle: 'italic', fontSize: '12px' }}>⚠ Could not decrypt</span>
+                        ? <span className="c-danger" style={{ fontStyle: 'italic', fontSize: '12px' }}>
+                            ⚠ Could not decrypt
+                          </span>
                         : <span>{msg.plaintext}</span>
                       }
                       <div className="msg-meta">
