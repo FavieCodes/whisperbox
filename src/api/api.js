@@ -31,12 +31,10 @@ export function getWsUrl(token) {
   const apiBase = import.meta.env.VITE_API_BASE
 
   if (apiBase) {
-    // Convert http(s):// → ws(s)://
     const wsBase = apiBase.replace(/^https/, 'wss').replace(/^http/, 'ws')
     return `${wsBase}/ws?token=${token}`
   }
 
-  // Local dev 
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${window.location.host}/ws?token=${token}`
 }
@@ -87,9 +85,19 @@ export const usersAPI = {
 }
 
 export const messagesAPI = {
-  send:        (recipientId, payload) => api.post('/messages', { to: recipientId, payload }),
-  getMessages: (userId, before)       => api.get(`/conversations/${userId}/messages`, { params: before ? { before } : {} }),
-  getInbox:    ()                     => api.get('/conversations'),
+  send: (recipientId, payload) =>
+    api.post('/messages', { to: recipientId, payload }),
+
+  // Fetch messages for a conversation.
+  getMessages: (userId, before) =>
+    api.get(`/conversations/${userId}/messages`, {
+      params: {
+        limit: 30,
+        ...(before ? { before } : {}),
+      },
+    }),
+
+  getInbox: () => api.get('/conversations'),
 }
 
 export default api
