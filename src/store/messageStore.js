@@ -7,6 +7,15 @@ let _wsInstance    = null
 let _wsListenerFn  = null
 let _inboxInflight = false
 
+// ── Hidden conversations persistence ─────────────────────────────────────────
+const loadHidden = () => {
+  try { return new Set(JSON.parse(localStorage.getItem('wb_hidden_convos') || '[]')) }
+  catch { return new Set() }
+}
+const saveHidden = (set) => {
+  try { localStorage.setItem('wb_hidden_convos', JSON.stringify([...set])) } catch { /* ignore */ }
+}
+
 const useMessageStore = create((set, get) => ({
   conversations:    {},
   conversationList: [],
@@ -14,11 +23,12 @@ const useMessageStore = create((set, get) => ({
   isLoading:        false,
   isSending:        false,
   error:            null,
-  wsStatus:         'idle', // 'idle' | 'connecting' | 'connected' | 'disconnected'
+  wsStatus:         'idle', 
+  unreadCounts:     {},    
+  hiddenConvos:     loadHidden(), 
 
   // ── WEBSOCKET ──────────────────────────────────────────────────────────────
   connectWS: (token, privateKey, onIncoming) => {
-    // Reuse an existing live socket — just swap the callback
     if (_wsInstance && _wsInstance.readyState <= WebSocket.OPEN) {
       _wsListenerFn = onIncoming
       return _wsInstance
@@ -53,7 +63,6 @@ const useMessageStore = create((set, get) => ({
         const frame = JSON.parse(event.data)
         if (frame.type === 'message.receive') {
           const msg = frame.payload
-          // Normalise field names from server
           const normalised = {
             ...msg,
             sender_id:    msg.sender_id    ?? msg.from_user_id,
@@ -61,7 +70,6 @@ const useMessageStore = create((set, get) => ({
           }
           let plaintext    = null
           let decryptError = true
-          // Try both key fields — incoming messages use encryptedKey
           for (const keyField of ['encryptedKey', 'encryptedKeyForSelf']) {
             if (!msg.payload?.[keyField]) continue
             try {
@@ -135,18 +143,14 @@ const useMessageStore = create((set, get) => ({
     set({ isLoading: true, activeUserId: contactId })
     try {
       const { data } = await messagesAPI.getMessages(contactId)
-      // API returns newest-first — reverse to get chronological order
       const raw = Array.isArray(data) ? [...data].reverse() : []
 
       const decrypted = await Promise.all(raw.map(async (msg) => {
-        // Normalise field names FIRST so sender_id is always set
         const normalised = {
           ...msg,
           sender_id:    msg.sender_id    ?? msg.from_user_id,
           recipient_id: msg.recipient_id ?? msg.to_user_id,
         }
-
-        // Try both key fields: encryptedKey (for recipient), encryptedKeyForSelf (for sender)
         for (const keyField of ['encryptedKey', 'encryptedKeyForSelf']) {
           if (!msg.payload?.[keyField]) continue
           try {
@@ -173,8 +177,6 @@ const useMessageStore = create((set, get) => ({
   },
 
   // ── SEND MESSAGE ───────────────────────────────────────────────────────────
-  // FIX: Always use REST API as primary send path for reliability.
-  // The WebSocket is for receiving real-time messages, not the guaranteed send path.
   sendMessage: async (recipientId, plaintext, myPrivateKey, myPublicKey, myId) => {
     if (!plaintext.trim()) return { success: false }
     set({ isSending: true, error: null })
@@ -183,10 +185,8 @@ const useMessageStore = create((set, get) => ({
       const recipientPublicKey = await importPublicKey(keyData.public_key)
       const payload            = await encryptMessage(plaintext, recipientPublicKey, myPublicKey)
 
-      // Always send via REST — server persists it and delivers via WS to recipient
       const { data: sentMsg } = await messagesAPI.send(recipientId, payload)
 
-      // Build the optimistic message using the real server-assigned ID
       const newMsg = {
         id:           sentMsg?.id || `temp-${Date.now()}`,
         sender_id:    myId,
@@ -207,9 +207,7 @@ const useMessageStore = create((set, get) => ({
         isSending: false,
       }))
 
-      // Also refresh the conversation list so this conversation bubbles to top
       get().loadInbox()
-
       return { success: true }
     } catch (e) {
       console.error('[sendMessage]', e.message)
@@ -228,9 +226,8 @@ const useMessageStore = create((set, get) => ({
     const senderId = normalised.sender_id
     set((s) => {
       const existing = s.conversations[senderId] ?? []
-      // Deduplicate by ID
       if (existing.some((m) => m.id === normalised.id)) return s
-      // Bubble the sender to top of conversation list
+
       const listEntry = s.conversationList.find((c) => (c.user_id || c.id) === senderId)
       const newList = listEntry
         ? [
@@ -238,10 +235,51 @@ const useMessageStore = create((set, get) => ({
             ...s.conversationList.filter((c) => (c.user_id || c.id) !== senderId),
           ]
         : s.conversationList
+
+      // Increment unread if not the active conversation
+      const isActive = s.activeUserId === senderId
+      const newUnreadCounts = isActive
+        ? s.unreadCounts
+        : { ...s.unreadCounts, [senderId]: (s.unreadCounts[senderId] ?? 0) + 1 }
+
+      // Un-hide if a new message arrives from a hidden conversation
+      const newHidden = new Set(s.hiddenConvos)
+      if (newHidden.has(senderId)) {
+        newHidden.delete(senderId)
+        saveHidden(newHidden)
+      }
+
       return {
         conversations:    { ...s.conversations, [senderId]: [...existing, normalised] },
         conversationList: newList,
+        unreadCounts:     newUnreadCounts,
+        hiddenConvos:     newHidden,
       }
+    })
+  },
+
+  // ── MARK CONVERSATION AS READ ──────────────────────────────────────────────
+  markRead: (userId) => {
+    set((s) => ({ unreadCounts: { ...s.unreadCounts, [userId]: 0 } }))
+  },
+
+  // ── HIDE / UNHIDE CONVERSATION ─────────────────────────────────────────────
+  hideConversation: (userId) => {
+    set((s) => {
+      const newHidden = new Set(s.hiddenConvos)
+      newHidden.add(userId)
+      saveHidden(newHidden)
+      const newActive = s.activeUserId === userId ? null : s.activeUserId
+      return { hiddenConvos: newHidden, activeUserId: newActive }
+    })
+  },
+
+  unhideConversation: (userId) => {
+    set((s) => {
+      const newHidden = new Set(s.hiddenConvos)
+      newHidden.delete(userId)
+      saveHidden(newHidden)
+      return { hiddenConvos: newHidden }
     })
   },
 
