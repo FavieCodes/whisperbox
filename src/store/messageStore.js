@@ -16,16 +16,47 @@ const saveHidden = (set) => {
   try { localStorage.setItem('wb_hidden_convos', JSON.stringify([...set])) } catch { /* ignore */ }
 }
 
+// ── Pagination config ─────────────────────────────────────────────────────────
+const PAGE_SIZE = 30
+
+// ── Decrypt a single raw message ──────────────────────────────────────────────
+async function decryptMsg(msg, privateKey) {
+  const normalised = {
+    ...msg,
+    sender_id:    msg.sender_id    ?? msg.from_user_id,
+    recipient_id: msg.recipient_id ?? msg.to_user_id,
+  }
+  for (const keyField of ['encryptedKey', 'encryptedKeyForSelf']) {
+    if (!msg.payload?.[keyField]) continue
+    try {
+      const plaintext = await decryptMessage(
+        msg.payload.ciphertext,
+        msg.payload.iv,
+        msg.payload[keyField],
+        privateKey,
+      )
+      return { ...normalised, plaintext, decryptError: false }
+    } catch { /* try next key field */ }
+  }
+  return { ...normalised, plaintext: null, decryptError: true }
+}
+
 const useMessageStore = create((set, get) => ({
-  conversations:    {},
+  conversations:    {},   
   conversationList: [],
   activeUserId:     null,
   isLoading:        false,
   isSending:        false,
+  isLoadingMore:    false, 
   error:            null,
-  wsStatus:         'idle', 
-  unreadCounts:     {},    
-  hiddenConvos:     loadHidden(), 
+  wsStatus:         'idle',
+  unreadCounts:     {},
+  hiddenConvos:     loadHidden(),
+
+  // ── Pagination state per conversation ────────────────────────────────────
+  
+  hasMore:   {},   
+  oldestId:  {},   
 
   // ── WEBSOCKET ──────────────────────────────────────────────────────────────
   connectWS: (token, privateKey, onIncoming) => {
@@ -113,22 +144,14 @@ const useMessageStore = create((set, get) => ({
       const { data } = await messagesAPI.getInbox()
       const list = Array.isArray(data) ? data : []
       set((s) => {
-        // Un-hide any conversations that appear in the inbox and have new
-        // activity (last_message_at changed) so they resurface automatically.
-        // We only auto-restore if they have a last_message_at (i.e. real activity).
         const newHidden = new Set(s.hiddenConvos)
-        let changed = false
         list.forEach((c) => {
           const cid = c.id ?? c.user_id
           if (newHidden.has(cid) && c.last_message_at) {
-            // Don't auto-restore on inbox load — only restore on explicit send/receive
-            // (handled in sendMessage & addIncoming). Keep hidden until user acts.
+           
           }
         })
-        return {
-          conversationList: list,
-          ...(changed ? { hiddenConvos: newHidden } : {}),
-        }
+        return { conversationList: list }
       })
     }
 
@@ -156,41 +179,80 @@ const useMessageStore = create((set, get) => ({
     }
   },
 
-  // ── LOAD CONVERSATION ──────────────────────────────────────────────────────
+  // ── LOAD CONVERSATION (initial, most-recent page) ─────────────────────────
+  //
   loadConversation: async (contactId, privateKey) => {
     set({ isLoading: true, activeUserId: contactId })
     try {
       const { data } = await messagesAPI.getMessages(contactId)
+      // API returns newest-first; 
       const raw = Array.isArray(data) ? [...data].reverse() : []
 
-      const decrypted = await Promise.all(raw.map(async (msg) => {
-        const normalised = {
-          ...msg,
-          sender_id:    msg.sender_id    ?? msg.from_user_id,
-          recipient_id: msg.recipient_id ?? msg.to_user_id,
-        }
-        for (const keyField of ['encryptedKey', 'encryptedKeyForSelf']) {
-          if (!msg.payload?.[keyField]) continue
-          try {
-            const plaintext = await decryptMessage(
-              msg.payload.ciphertext,
-              msg.payload.iv,
-              msg.payload[keyField],
-              privateKey,
-            )
-            return { ...normalised, plaintext, decryptError: false }
-          } catch { /* try next key field */ }
-        }
-        return { ...normalised, plaintext: null, decryptError: true }
-      }))
+      const decrypted = await Promise.all(raw.map((msg) => decryptMsg(msg, privateKey)))
+
+      // Oldest message 
+      const oldest = decrypted[0]?.id ?? null
 
       set((s) => ({
         conversations: { ...s.conversations, [contactId]: decrypted },
+        hasMore:       { ...s.hasMore,  [contactId]: raw.length >= PAGE_SIZE },
+        oldestId:      { ...s.oldestId, [contactId]: oldest },
         isLoading: false,
       }))
     } catch (e) {
       console.error('[loadConversation]', e.message)
       set({ isLoading: false })
+    }
+  },
+
+  // ── LOAD MORE (older messages — pagination) ───────────────────────────────
+ 
+  loadMoreMessages: async (contactId, privateKey) => {
+    const state = get()
+    if (
+      state.isLoadingMore ||
+      !state.hasMore[contactId] ||
+      !state.oldestId[contactId]
+    ) return
+
+    set({ isLoadingMore: true })
+    try {
+      const { data } = await messagesAPI.getMessages(contactId, state.oldestId[contactId])
+      const raw = Array.isArray(data) ? [...data].reverse() : []
+
+      if (raw.length === 0) {
+        // Nothing older
+        set((s) => ({
+          hasMore:       { ...s.hasMore, [contactId]: false },
+          isLoadingMore: false,
+        }))
+        return
+      }
+
+      const decrypted = await Promise.all(raw.map((msg) => decryptMsg(msg, privateKey)))
+
+      // The new oldest id is the first element of the prepended batch
+      const newOldest = decrypted[0]?.id ?? state.oldestId[contactId]
+
+      set((s) => {
+        const existing = s.conversations[contactId] ?? []
+        // Deduplicate: drop any ids that are already in existing
+        const existingIds = new Set(existing.map((m) => m.id))
+        const fresh = decrypted.filter((m) => !existingIds.has(m.id))
+
+        return {
+          conversations: {
+            ...s.conversations,
+            [contactId]: [...fresh, ...existing],
+          },
+          hasMore:       { ...s.hasMore,  [contactId]: raw.length >= PAGE_SIZE },
+          oldestId:      { ...s.oldestId, [contactId]: newOldest },
+          isLoadingMore: false,
+        }
+      })
+    } catch (e) {
+      console.error('[loadMoreMessages]', e.message)
+      set({ isLoadingMore: false })
     }
   },
 
@@ -218,7 +280,6 @@ const useMessageStore = create((set, get) => ({
       }
 
       set((s) => {
-        // Un-hide the recipient if they were previously removed
         const newHidden = new Set(s.hiddenConvos)
         if (newHidden.has(recipientId)) {
           newHidden.delete(recipientId)
@@ -264,13 +325,11 @@ const useMessageStore = create((set, get) => ({
           ]
         : s.conversationList
 
-      // Increment unread if not the active conversation
       const isActive = s.activeUserId === senderId
       const newUnreadCounts = isActive
         ? s.unreadCounts
         : { ...s.unreadCounts, [senderId]: (s.unreadCounts[senderId] ?? 0) + 1 }
 
-      // Un-hide if a new message arrives from a hidden conversation
       const newHidden = new Set(s.hiddenConvos)
       if (newHidden.has(senderId)) {
         newHidden.delete(senderId)
