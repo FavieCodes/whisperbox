@@ -111,7 +111,25 @@ const useMessageStore = create((set, get) => ({
 
     const attempt = async () => {
       const { data } = await messagesAPI.getInbox()
-      set({ conversationList: Array.isArray(data) ? data : [] })
+      const list = Array.isArray(data) ? data : []
+      set((s) => {
+        // Un-hide any conversations that appear in the inbox and have new
+        // activity (last_message_at changed) so they resurface automatically.
+        // We only auto-restore if they have a last_message_at (i.e. real activity).
+        const newHidden = new Set(s.hiddenConvos)
+        let changed = false
+        list.forEach((c) => {
+          const cid = c.id ?? c.user_id
+          if (newHidden.has(cid) && c.last_message_at) {
+            // Don't auto-restore on inbox load — only restore on explicit send/receive
+            // (handled in sendMessage & addIncoming). Keep hidden until user acts.
+          }
+        })
+        return {
+          conversationList: list,
+          ...(changed ? { hiddenConvos: newHidden } : {}),
+        }
+      })
     }
 
     const delays = [2000, 4000, 6000, 8000]
@@ -199,13 +217,23 @@ const useMessageStore = create((set, get) => ({
         created_at:   sentMsg?.created_at || new Date().toISOString(),
       }
 
-      set((s) => ({
-        conversations: {
-          ...s.conversations,
-          [recipientId]: [...(s.conversations[recipientId] ?? []), newMsg],
-        },
-        isSending: false,
-      }))
+      set((s) => {
+        // Un-hide the recipient if they were previously removed
+        const newHidden = new Set(s.hiddenConvos)
+        if (newHidden.has(recipientId)) {
+          newHidden.delete(recipientId)
+          saveHidden(newHidden)
+        }
+
+        return {
+          conversations: {
+            ...s.conversations,
+            [recipientId]: [...(s.conversations[recipientId] ?? []), newMsg],
+          },
+          hiddenConvos: newHidden,
+          isSending: false,
+        }
+      })
 
       get().loadInbox()
       return { success: true }
